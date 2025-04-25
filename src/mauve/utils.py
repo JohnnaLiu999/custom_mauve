@@ -22,18 +22,28 @@ def get_device_from_arg(device_id):
     else:
         return CPU_DEVICE
 
-def get_model(model_name, tokenizer, device_id):
+def get_model(model_name, tokenizer, device_id, model_type='gpt2'):
     device = get_device_from_arg(device_id)
-    if 'gpt2' in model_name or "bert" in model_name:
-        model = AutoModel.from_pretrained(model_name, pad_token_id=tokenizer.eos_token_id).to(device)
-        model = model.eval()
+    # trust_remote_code = 'modernbert' in model_name.lower()
+    if model_type == 'gpt2':
+        model = AutoModel.from_pretrained(
+            model_name, 
+            pad_token_id=tokenizer.eos_token_id
+        ).to(device)
+    elif model_type == 'bert':
+        model = AutoModel.from_pretrained(
+            model_name, 
+        ).to(device)
     else:
-        raise ValueError(f'Unknown model: {model_name}')
+        raise ValueError(f'Unknown model type: {model_type}')
+    model = model.eval()
     return model
 
 def get_tokenizer(model_name='gpt2'):
-    if 'gpt2' in model_name or "bert" in model_name:
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
+    if 'gpt2' in model_name or "bert" in model_name or "BERT" in model_name:
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_name,
+        )   #TODO:check what specifially tokenizer modernbert used OR ask Guanghan directly
     else:
         raise ValueError(f'Unknown model: {model_name}')
     return tokenizer
@@ -84,7 +94,7 @@ def decode_samples_from_lst(tokenizer, tokenized_texts):
     return output
 
 @torch.no_grad()
-def featurize_tokens_from_model(model, tokenized_texts, batch_size, name="", verbose=False):
+def featurize_tokens_from_model(model, tokenized_texts, batch_size, name="", verbose=False, model_type='gpt2'):
     """Featurize tokenized texts using models, support batchify
     :param model: HF Transformers model
     :param batch_size: Batch size used during forward pass
@@ -104,24 +114,24 @@ def featurize_tokens_from_model(model, tokenized_texts, batch_size, name="", ver
         chunk_idx += 1
 
     for chunk, chunk_sent_length in tqdm(list(zip(chunks, chunk_sent_lengths)), desc=f"Featurizing {name}"):
-        padded_chunk = torch.nn.utils.rnn.pad_sequence(chunk,
-                                                       batch_first=True,
-                                                       padding_value=0).to(device)
+        padded_chunk = torch.nn.utils.rnn.pad_sequence(chunk, batch_first=True, padding_value=0).to(device)
         attention_mask = torch.nn.utils.rnn.pad_sequence(
             [torch.ones(sent_length).long() for sent_length in chunk_sent_length],
             batch_first=True,
             padding_value=0).to(device)
-        outs = model(input_ids=padded_chunk,
-                     attention_mask=attention_mask,
-                     past_key_values=None,
-                     output_hidden_states=True,
-                     return_dict=True)
-        h = []
-        for hidden_state, sent_length in zip(outs.hidden_states[-1], chunk_sent_length):
-            h.append(hidden_state[sent_length - 1])
-        h = torch.stack(h, dim=0)
+        if model_type == 'gpt2':
+            outs = model(input_ids=padded_chunk, attention_mask=attention_mask, output_hidden_states=True, return_dict=True)
+            h = []
+            for hidden_state, sent_length in zip(outs.hidden_states[-1], chunk_sent_length):
+                h.append(hidden_state[sent_length - 1])  # Last token for GPT-2
+            h = torch.stack(h, dim=0)
+        elif model_type == 'bert':
+            outs = model(input_ids=padded_chunk, attention_mask=attention_mask, output_hidden_states=True, return_dict=True)
+            h = outs.last_hidden_state[:, 0, :]  # [CLS] token for BERT
+        else:
+            raise ValueError(f'Unknown model type: {model_type}')
         feats.append(h.cpu())
     t2 = time.time()
     if verbose:
-        print(f'Featurize time: {round(t2-t1, 2)}')
+        print(f'Featurize time: {round(t2 - t1, 2)}')
     return torch.cat(feats)

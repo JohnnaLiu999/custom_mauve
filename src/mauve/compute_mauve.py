@@ -36,7 +36,8 @@ def compute_mauve(
         p_text=None, q_text=None,
         num_buckets='auto', pca_max_data=-1, kmeans_explained_var=0.9,
         kmeans_num_redo=5, kmeans_max_iter=500,
-        featurize_model_name='gpt2-large', device_id=-1, max_text_length=1024,
+        featurize_model_name='gpt2-large', featurize_model_type = 'gpt2', 
+        device_id=-1, max_text_length=1024,
         divergence_curve_discretization_size=25, mauve_scaling_factor=5,
         verbose=False, seed=25, batch_size=1, use_float64=False,
 ):
@@ -92,10 +93,12 @@ def compute_mauve(
     p_features = get_features_from_input(
         p_features, p_tokens, p_text, featurize_model_name, max_text_length,
         device_id, name="p", verbose=verbose, batch_size=batch_size, use_float64=use_float64,
+        featurize_model_type=featurize_model_type
     )
     q_features = get_features_from_input(
         q_features, q_tokens, q_text, featurize_model_name, max_text_length,
         device_id, name="q", verbose=verbose, batch_size=batch_size, use_float64=use_float64,
+        featurize_model_type=featurize_model_type
     )
     if num_buckets == 'auto':
         # Heuristic: use num_clusters = num_generations / 10.
@@ -145,8 +148,8 @@ def compute_mauve(
 
 def get_features_from_input(features, tokenized_texts, texts,
                             featurize_model_name, max_len, device_id, name, batch_size,
-                            verbose=False, use_float64=False):
-    global MODEL, TOKENIZER, MODEL_NAME
+                            verbose=False, use_float64=False, featurize_model_type='gpt2'):
+    global MODEL, TOKENIZER, MODEL_NAME, MODEL_TYPE
     if features is None:
         # Featurizing is necessary. Make sure the required packages are available.
         if not FOUND_TORCH:
@@ -167,7 +170,7 @@ def get_features_from_input(features, tokenized_texts, texts,
             texts = [sen for sen in texts if len(sen) > 0]  # Remove empty strings.
             if len(texts) == 0:
                 raise ValueError(f'Variable `{name}_text` is empty. Please provide non-empty strings.')
-            if TOKENIZER is None or MODEL_NAME != featurize_model_name:
+            if TOKENIZER is None or MODEL_NAME != featurize_model_name or MODEL_TYPE != featurize_model_type:
                 if verbose: print('Loading tokenizer')
                 TOKENIZER = get_tokenizer(featurize_model_name)
             if verbose: print('Tokenizing text...')
@@ -181,19 +184,22 @@ def get_features_from_input(features, tokenized_texts, texts,
                 raise ValueError(f'Variable `{name}_tokens` is empty. Please provide non-empty tokenized texts.')
     
         # Use tokenized_texts to featurize.
-        if TOKENIZER is None or MODEL_NAME != featurize_model_name:
+        if TOKENIZER is None or MODEL_NAME != featurize_model_name or MODEL_TYPE != featurize_model_type:
             if verbose: print('Loading tokenizer')
             TOKENIZER = get_tokenizer(featurize_model_name)
-        if MODEL is None or MODEL_NAME != featurize_model_name:
+        if MODEL is None or MODEL_NAME != featurize_model_name or MODEL_TYPE != featurize_model_type:
             if verbose: print('Loading model')
-            MODEL = get_model(featurize_model_name, TOKENIZER, device_id)
+            MODEL = get_model(featurize_model_name, TOKENIZER, device_id, model_type=featurize_model_type)
             MODEL_NAME = featurize_model_name
+            MODEL_TYPE = featurize_model_type  # Track model type
         else:
             MODEL = MODEL.to(get_device_from_arg(device_id))
         if use_float64:
             MODEL = MODEL.double()
         if verbose: print('Featurizing tokens')
-        features = featurize_tokens_from_model(MODEL, tokenized_texts, batch_size, name).detach().cpu().numpy()
+        features = featurize_tokens_from_model(
+            MODEL, tokenized_texts, batch_size, name, verbose, model_type=featurize_model_type
+        ).detach().cpu().numpy()
     else:
         features = np.asarray(features)
         if features.shape[0] == 0:
